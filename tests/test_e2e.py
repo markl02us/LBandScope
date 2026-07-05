@@ -21,7 +21,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lbandscope import (dsp, iqsource, channelize, demo, sdr, presets,  # noqa: E402
-                        spectrum, messages, frontend)
+                        spectrum, messages, frontend, stdc)
 
 
 def _roundtrip(payload: bytes, snr_db: float, cfo: float, seed_ch: int) -> bytes:
@@ -219,6 +219,30 @@ def test_frontend_conditioning():
     assert frontend.quality_db(spectrum.spectrum_db(tone, 256)) > 10
 
 
+def test_stdc_chain_roundtrip():
+    """The Inmarsat-C receive chain (UW sync, depermute, deinterleave, K=7
+    Viterbi, descramble) must be exactly inverse to the transmit chain, and the
+    FEC must correct a realistic symbol-error rate."""
+    rng = np.random.default_rng(11)
+    frame = rng.integers(0, 256, stdc.INFO_BYTES, dtype=np.uint8).tobytes()
+    sym = stdc.encode_frame(frame)
+    assert sym.size == stdc.FRAME_SYMBOLS
+    assert stdc.decode_frame(sym)["bytes"] == frame
+
+    # frame sync locates an embedded frame at the right offset and polarity
+    stream = np.concatenate([rng.integers(0, 2, 400, dtype=np.uint8), sym,
+                             rng.integers(0, 2, 200, dtype=np.uint8)])
+    hits = stdc.find_uw(stream)
+    assert hits and hits[0][0] == 400 and not hits[0][1]
+    assert stdc.decode_frame(stream[400:400 + stdc.FRAME_SYMBOLS])["bytes"] == frame
+
+    # Viterbi corrects 1% of the data-carrying symbols flipped
+    noisy = sym.copy()
+    flip = rng.choice(stdc._TX_POS, int(0.01 * stdc._TX_POS.size), replace=False)
+    noisy[flip] ^= 1
+    assert stdc.decode_frame(noisy)["bytes"] == frame
+
+
 def test_gui_constructs():
     """The window must build without error (skipped if no display available)."""
     import tkinter as tk
@@ -243,7 +267,8 @@ if __name__ == "__main__":
              test_doctor_no_crash_without_backend,
              test_spectrum_locates_tone, test_message_parse_and_export,
              test_constellation_symbols, test_find_peak_offset,
-             test_frontend_conditioning, test_gui_constructs]
+             test_frontend_conditioning, test_stdc_chain_roundtrip,
+             test_gui_constructs]
     failed = 0
     for t in tests:
         try:

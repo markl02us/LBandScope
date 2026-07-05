@@ -117,10 +117,13 @@ records the measured behavior.
 ## Scope
 
 The reusable receiver stages and the front end (device I/O, channelizer, stream
-framing, application) are in place and tested. The self-test frame format
-validates the chain end to end without hardware. Waveform-specific demodulators
-for the individual Inmarsat modes are the next addition; `channelize.rrc`
-provides the matched filter they require.
+framing, application) are in place and tested. The Inmarsat-C (STD-C) receive
+chain — unique-word frame synchronisation, row depermutation, deinterleaving,
+K=7 rate-1/2 Viterbi FEC, and descrambling — is implemented in `stdc.py` and
+validated by a full transmit/receive round trip: a random frame returns
+byte-exact and the Viterbi stage corrects a realistic symbol-error rate. The
+remaining work to decode a live STD-C signal is the symbol demodulator (carrier
+and timing recovery from IQ) and validation against an off-air capture.
 
 ## License
 
