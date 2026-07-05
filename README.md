@@ -7,18 +7,14 @@ It is free, open-source software under the GNU General Public License v3 (see
 `LICENSE`), written to help more people receive and experiment with these signals
 and to give anyone a starting point to build on.
 
-## Related projects
+## Acknowledgments
 
-This is an independent implementation and shares no code with the projects below.
-Anyone who wants a more complete decoder, or who wants to take this further,
-should start with them:
+Inmarsat decoding has a long open-source history. This project is an independent
+implementation that shares no code with the projects below; it acknowledges their
+contributions to the field:
 
-- **InmarScope** by Sarah Rose Lives — a full multi-channel Inmarsat decoder for
-  Windows with voice-call following and more:
-  <https://github.com/SarahRoseLives/InmarScope>. Precompiled builds are available
-  through <https://sarahsforge.dev>.
-- **JAERO** by Jonti — the widely used open-source Inmarsat Aero decoder whose DSP
-  work underpins much of this field: <https://github.com/jontio/JAERO>.
+- **InmarScope** by Sarah Rose Lives: <https://github.com/SarahRoseLives/InmarScope>
+- **JAERO** by Jonti: <https://github.com/jontio/JAERO>
 
 ## What it does
 

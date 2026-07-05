@@ -51,9 +51,8 @@ A decoder and monitor for Inmarsat L-band signals.
 
 Free, open-source software under the GNU General Public License v3.
 
-An independent implementation. For a more complete decoder see InmarScope by
-Sarah Rose Lives, and JAERO by Jonti, whose work in this field this project
-builds on in spirit.
+An independent implementation. Acknowledgments to other open-source work in this
+field, including InmarScope (Sarah Rose Lives) and JAERO (Jonti).
 """
 
 
