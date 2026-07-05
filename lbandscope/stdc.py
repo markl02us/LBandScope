@@ -121,6 +121,49 @@ def viterbi_decode(coded: np.ndarray) -> np.ndarray:
     return bits
 
 
+# Expected channel symbols (+1 for a 0 bit, -1 for a 1 bit) on each trellis edge.
+_S0A, _S0B = 1.0 - 2.0 * _EO0A, 1.0 - 2.0 * _EO0B
+_S1A, _S1B = 1.0 - 2.0 * _EO1A, 1.0 - 2.0 * _EO1B
+
+
+def soft_viterbi(coded_soft: np.ndarray) -> np.ndarray:
+    """Soft-decision Viterbi. `coded_soft` holds one real value per coded symbol,
+    positive for a 0 bit; magnitude is confidence. Returns the info bits. About
+    2 dB more sensitive than the hard-decision path."""
+    coded_soft = np.asarray(coded_soft, dtype=np.float64)
+    n = coded_soft.size // 2
+    r = coded_soft[: 2 * n].reshape(n, 2)
+    neg = -1e18
+    pm = np.full(ROWS, neg, dtype=np.float64)
+    pm[0] = 0.0
+    dec = np.empty((n, ROWS), dtype=np.uint8)
+    for k in range(n):
+        v0, v1 = r[k, 0], r[k, 1]
+        b0 = pm[_PREV0] + v0 * _S0A + v1 * _S0B
+        b1 = pm[_PREV1] + v0 * _S1A + v1 * _S1B
+        sel = b1 > b0
+        pm = np.where(sel, b1, b0)
+        dec[k] = np.where(sel, _PREV1, _PREV0).astype(np.uint8)
+    s = int(np.argmax(pm))
+    bits = np.empty(n, dtype=np.uint8)
+    for k in range(n - 1, -1, -1):
+        bits[k] = s & 1
+        s = int(dec[k, s])
+    return bits
+
+
+def decode_soft(soft: np.ndarray) -> dict:
+    """Decode a frame from soft channel symbols (one real value per symbol,
+    positive for a 0 bit). Same chain as `decode_frame` with the soft Viterbi."""
+    soft = np.asarray(soft, dtype=np.float64)
+    if soft.size != FRAME_SYMBOLS:
+        raise ValueError(f"frame must be {FRAME_SYMBOLS} symbols, got {soft.size}")
+    bits = soft_viterbi(soft[_DECODE_GATHER])
+    payload = scramble_bytes(np.packbits(bits))
+    return {"bytes": payload.tobytes(),
+            "frame_number": (int(payload[2]) << 8) | int(payload[3])}
+
+
 # --- scrambler --------------------------------------------------------------
 def _descrambler_array() -> np.ndarray:
     reg = 0x80

@@ -36,3 +36,43 @@ energy, so no gain calibration is required and no frames are produced from noise
   dropped; it is never reported incorrectly. Stateful filtering removes this.
 - These figures validate the pipeline, not live reception, which requires a
   receiver and antenna.
+
+## Inmarsat-C (STD-C) receiver
+
+Measured by `python tests/evaluate_stdc.py`. No off-air captures of this signal
+are published, so the evaluation reproduces a faithful downlink: the real unique
+word, permutation, interleaver, K=7 convolutional code, and scrambler, root-
+raised-cosine shaped, then impaired with noise, a carrier offset, and a sample-
+clock error. The whole receiver (demodulator, sync, Viterbi, descrambler, parser)
+is scored against it. SNR is broadband at 8 samples/symbol; the matched filter
+adds about 9 dB of processing gain.
+
+| Test | Result |
+|------|--------|
+| Sensitivity, frame decode rate, hard-decision Viterbi | 0% error to about -6 dB; collapses by -8 dB |
+| Sensitivity, frame decode rate, soft-decision Viterbi | 0% error to about -8 dB; ~-9 dB threshold |
+| Carrier-offset tolerance | full rate to +/-400 Hz and beyond |
+| Sample-clock tolerance | full rate to 80 ppm |
+| End-to-end message integrity (5-message downlink, 0 dB, 180 Hz, 15 ppm) | 5/5 messages, distress flagged, 5/5 positions |
+| Decode throughput | ~60x real time |
+
+The dominant sensitivity gain came from carrier recovery, not error correction.
+Diagnosis showed the floor was set entirely by frame synchronisation: every frame
+that synchronised decoded, and every failure was a sync failure caused by a noisy
+residual-frequency estimate rotating the frame. Moving frequency acquisition to a
+parabolically-refined squared-spectrum peak fixed synchronisation and lowered the
+floor by more than 12 dB. Only then did soft-decision Viterbi contribute its
+expected further 2-3 dB — until the sync bottleneck was cleared, soft decisions
+made no measurable difference.
+
+### Notes and limits
+
+- Carrier acquisition searches the squared signal within +/-0.8*symbol_rate, so
+  it captures offsets up to about +/-0.4*symbol_rate (~480 Hz). Larger offsets
+  need the channel roughly centred first, which the application's tuning and
+  "Find signal" provide.
+- Timing uses maximum-eye-opening sample selection, adequate to 80 ppm — beyond
+  any practical receiver clock. A tracking loop would extend this further but is
+  not required for real hardware.
+- These figures validate the receiver against a faithful signal model.
+  Confirmation on a genuine off-air capture is the remaining step.

@@ -144,8 +144,12 @@ readable EGC/marine messages — packet framing, checksums, IA5/ITA2 text,
 multi-frame reassembly, and service/priority/distress classification. The whole
 receiver is validated end to end: a readable EGC message becomes symbols, a
 pulse-shaped noisy IQ signal, and is demodulated, decoded byte-exact, parsed, and
-read back (through about 10 dB SNR). The remaining step is confirmation against a
-real off-air capture.
+read back. The demodulator uses a parabolically-refined squared-spectrum carrier
+estimate and soft-decision Viterbi; after that work the frame-decode floor is
+about -8 dB broadband SNR (roughly 18 dB better than the first version), with
+carrier tolerance beyond +/-400 Hz and clock tolerance to 80 ppm. See
+`EVALUATION.md` and `python tests/evaluate_stdc.py`. The remaining step is
+confirmation against a real off-air capture.
 
 ## License
 

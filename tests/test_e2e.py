@@ -281,6 +281,27 @@ def test_stdc_full_pipeline():
     assert any("NAVAREA III 042/26" in m["text"] for m in msgs)
 
 
+def test_stdc_soft_decision_sensitivity():
+    """The soft-decision receiver decodes at a broadband SNR (-7 dB) below the
+    hard-decision floor, confirming the coding gain is wired end to end."""
+    from lbandscope import stdc, stdc_demod as d
+
+    def trial(seed):
+        rng = np.random.default_rng(seed)
+        fr = rng.integers(0, 256, stdc.INFO_BYTES, dtype=np.uint8).tobytes()
+        tx = d.modulate_iq(stdc.encode_frame(fr))
+        fs = int(d.SYMBOL_RATE * 8)
+        n = np.arange(len(tx))
+        rx = tx * np.exp(1j * (2 * np.pi * (70 / fs) * n + 0.6))
+        p = np.mean(np.abs(tx) ** 2) / 10 ** (-7 / 10)
+        rx = rx + np.sqrt(p / 2) * (rng.standard_normal(len(rx)) + 1j * rng.standard_normal(len(rx)))
+        f = d.receive(rx, fs, soft=True)
+        return bool(f) and f[0]["bytes"] == fr
+
+    ok = sum(trial(s) for s in range(10))
+    assert ok >= 8, f"soft decode only {ok}/10 at -7 dB broadband SNR"
+
+
 def test_stdc_demo_source():
     """The offline STD-C demo is a decodable continuous stream with an EGC
     distress and a NAVAREA warning."""
@@ -343,8 +364,8 @@ if __name__ == "__main__":
              test_constellation_symbols, test_find_peak_offset,
              test_frontend_conditioning, test_stdc_chain_roundtrip,
              test_stdc_demod_end_to_end, test_stdc_parser,
-             test_stdc_full_pipeline, test_stdc_demo_source,
-             test_cli_decode_stdc, test_gui_constructs]
+             test_stdc_full_pipeline, test_stdc_soft_decision_sensitivity,
+             test_stdc_demo_source, test_cli_decode_stdc, test_gui_constructs]
     failed = 0
     for t in tests:
         try:

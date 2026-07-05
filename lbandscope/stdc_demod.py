@@ -28,18 +28,23 @@ SYMBOL_RATE = 1200.0
 
 def _remove_coarse_cfo(x: np.ndarray, fs: float, symbol_rate: float) -> np.ndarray:
     """Squaring carrier estimate: x**2 removes BPSK data and leaves a tone at
-    twice the carrier offset. Search is limited to +/-0.4*symbol_rate to avoid
-    the symbol-rate lines that pulse shaping also produces."""
+    twice the carrier offset. The tone is found by FFT and refined to sub-bin by
+    parabolic interpolation for a precise, low-variance estimate. The search
+    spans +/-0.8*symbol_rate (so carrier offsets up to +/-0.4*symbol_rate are
+    acquired) while staying clear of the +/-symbol_rate pulse-shaping lines."""
     sq = x * x
     sq = sq - sq.mean()
     n = len(sq)
     spec = np.abs(np.fft.fft(sq))
     freqs = np.fft.fftfreq(n, d=1.0 / fs)
-    band = np.abs(freqs) < 0.4 * symbol_rate
+    band = np.abs(freqs) < 0.8 * symbol_rate
     k = int(np.argmax(np.where(band, spec, 0.0)))
     if spec[k] < 6.0 * np.median(spec):
         return x
-    cfo = freqs[k] / 2.0
+    a, b, c = spec[(k - 1) % n], spec[k], spec[(k + 1) % n]
+    den = a - 2 * b + c
+    delta = float(np.clip(0.5 * (a - c) / den, -0.5, 0.5)) if den != 0 else 0.0
+    cfo = (freqs[k] + delta * fs / n) / 2.0
     return x * np.exp(-1j * 2 * np.pi * (cfo / fs) * np.arange(n))
 
 
@@ -72,17 +77,20 @@ def _symbols(iq: np.ndarray, samp_rate: float, symbol_rate: float = SYMBOL_RATE,
     return grid[:, phase]
 
 
-def _derotate_slice(syms: np.ndarray) -> np.ndarray:
-    """Remove residual carrier frequency then phase (squaring), slice to 0/1.
-    Global polarity is left for the unique word to settle."""
+def _derotate(syms: np.ndarray) -> np.ndarray:
+    """Remove the carrier phase (squaring estimate) from a block of symbols.
+    Returns the corrected complex symbols; the real part is the soft bit value
+    and its sign is the hard bit. Global polarity is left for the unique word.
+
+    Frequency is handled up front by the coarse estimate in `_symbols`, which
+    runs over the whole capture with fine resolution; a per-frame frequency term
+    is not only unnecessary but harmful, because on a short block the squared
+    spectrum's data self-noise can outweigh the small residual carrier tone."""
     syms = np.asarray(syms, dtype=np.complex128)
     if len(syms) > 1:
-        sq = syms * syms
-        w = np.angle(np.sum(sq[1:] * np.conj(sq[:-1]))) / 2.0
-        syms = syms * np.exp(-1j * w * np.arange(len(syms)))
         theta = np.angle(np.sum(syms * syms)) / 2.0
         syms = syms * np.exp(-1j * theta)
-    return (syms.real < 0).astype(np.uint8)
+    return syms
 
 
 def demodulate_symbols(iq: np.ndarray, samp_rate: float,
@@ -90,32 +98,36 @@ def demodulate_symbols(iq: np.ndarray, samp_rate: float,
                        sps: int = 8) -> np.ndarray:
     """Baseband IQ -> hard symbol stream (0/1), carrier removed over the whole
     buffer. Suitable for a single frame; `receive` corrects per frame."""
-    return _derotate_slice(_symbols(iq, samp_rate, symbol_rate, beta, sps))
+    return (_derotate(_symbols(iq, samp_rate, symbol_rate, beta, sps)).real < 0).astype(np.uint8)
 
 
 def receive(iq: np.ndarray, samp_rate: float, symbol_rate: float = SYMBOL_RATE,
-            tolerance: int = 30, **kw) -> list[dict]:
-    """Full STD-C receive: locate every frame, then correct carrier and slice
-    each frame independently so a slowly drifting or multi-frame capture still
-    decodes. Returns decoded frames."""
+            tolerance: int = 30, soft: bool = True, **kw) -> list[dict]:
+    """Full STD-C receive: locate every frame and decode it (soft-decision by
+    default) with carrier corrected per frame, so a drifting or multi-frame
+    capture decodes. Returns decoded frames.
+
+    The coarse carrier estimate removes the frequency offset over the whole
+    capture, so one pass of the unique-word finder locates every frame; each is
+    then phase-corrected and decoded independently."""
     syms = _symbols(iq, samp_rate, symbol_rate, **kw)
-    if len(syms) < stdc.FRAME_SYMBOLS:
+    frame = stdc.FRAME_SYMBOLS
+    if len(syms) < frame:
         return []
-    provisional = _derotate_slice(syms)
+    provisional = (_derotate(syms).real < 0).astype(np.uint8)
     out = []
     for offset, _rev in stdc.find_uw(provisional, tolerance):
-        seg = syms[offset:offset + stdc.FRAME_SYMBOLS]
-        if len(seg) < stdc.FRAME_SYMBOLS:
+        seg = syms[offset:offset + frame]
+        if len(seg) < frame:
             continue
-        bits = _derotate_slice(seg)                 # per-frame carrier correction
-        hits = stdc.find_uw(bits, tolerance)        # resolve this frame's polarity
+        d = _derotate(seg)                            # per-frame phase correction
+        hits = stdc.find_uw((d.real < 0).astype(np.uint8), tolerance)
         if not hits:
             continue
-        if hits[0][1]:
-            bits = 1 - bits
-        frame = stdc.decode_frame(bits)
-        frame["offset"] = int(offset)
-        out.append(frame)
+        real = -d.real if hits[0][1] else d.real      # align polarity: + for a 0 bit
+        fr = stdc.decode_soft(real) if soft else stdc.decode_frame((real < 0).astype(np.uint8))
+        fr["offset"] = int(offset)
+        out.append(fr)
     return out
 
 
