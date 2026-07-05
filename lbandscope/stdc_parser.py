@@ -289,6 +289,26 @@ def _build_medium_packet(descriptor, body) -> bytes:
     return bytes(pkt)
 
 
+def build_egc(message_type, priority, text, presentation=PRESENTATION_IA5,
+              message_id=0x1234, packet_no=1) -> bytes:
+    """Assemble one EGC message packet (0xB1) with a valid checksum. Mainly for
+    tests and the offline demonstration."""
+    addr_len = _ADDRESS_LEN.get(message_type, 3)
+    header = bytes([message_type, (priority & 0x03) << 5,
+                    (message_id >> 8) & 0xFF, message_id & 0xFF,
+                    packet_no & 0xFF, presentation])
+    body = header + bytes(addr_len) + text.encode("latin-1", "ignore")
+    return _build_medium_packet(0xB1, body)
+
+
+def build_frame(packets) -> bytes:
+    """Pack packets into a 640-byte frame padded with filler."""
+    blob = b"".join(packets)
+    if len(blob) > FRAME_LEN:
+        raise ValueError("packets exceed frame length")
+    return blob.ljust(FRAME_LEN, b"\x00")
+
+
 def _selftest() -> dict:
     text = "TEST NAVAREA III 001/26 GALE WARNING"
     # EGC message (0xB1): messageType 0x31 (NAVAREA, addr len 4), priority urgency.

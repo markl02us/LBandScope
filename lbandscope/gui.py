@@ -15,7 +15,8 @@ from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 
-from . import __version__, demo, dsp, frontend, messages, presets, sdr, spectrum
+from . import (__version__, channelize, demo, dsp, frontend, messages, presets,
+               sdr, spectrum, stdc, stdc_demod, stdc_parser)
 
 DEMO_RADIO = "Demo (no radio required)"
 NFFT = 256
@@ -219,43 +220,89 @@ class App(tk.Tk):
 
     def _run(self, preset, device, clean, bias):
         try:
-            if device is None:
+            kind = preset["kind"]
+            if kind == "stdc-demo":
+                self.q.put(("log", "STD-C demo: sample EGC safety traffic."))
+                self._run_stdc(demo.stdc_demo_blocks(n_blocks=10 ** 9),
+                               fs=stdc_demod.SYMBOL_RATE * 8, clean=False, live=True)
+            elif device is None:
                 self.q.put(("log", "Demo mode."))
-                source, sps, live = demo.demo_iq_blocks(n_blocks=10 ** 9), 8, True
+                self._run_aero(demo.demo_iq_blocks(n_blocks=10 ** 9), 8, clean, True)
             else:
                 self.q.put(("log", f"Receiving on {device['label']}."))
                 cfg = {"freq": preset["freq"], "rate": preset["rate"], "bias_tee": bias}
-                source, sps, live = sdr.stream(device, cfg), preset.get("sps", 8), False
-            for block in source:
-                if self.stop_flag.is_set():
-                    break
-                if clean:
-                    block = frontend.precondition(block)
-                rf = self._rec_file
-                if rf is not None:
-                    inter = np.empty(block.size * 2, np.float32)
-                    inter[0::2], inter[1::2] = block.real, block.imag
-                    try:
-                        rf.write(inter.tobytes())
-                    except Exception:
-                        pass
-                row = spectrum.spectrum_db(block, NFFT)
-                self.q.put(("spectrum", row))
-                self.q.put(("meter", (frontend.signal_level_db(block),
-                                      frontend.quality_db(row))))
-                for f in dsp.decode_frames(block, sps, with_symbols=True):
-                    self.q.put(("msg", f["payload"]))
-                    if "symbols" in f:
-                        s = f["symbols"]
-                        if len(s) > 500:
-                            s = s[np.linspace(0, len(s) - 1, 500).astype(int)]
-                        self.q.put(("const", s))
-                if live:
-                    time.sleep(0.7)
+                if kind == "inmarsat" and int(preset.get("baud", 0)) == 1200:
+                    self._run_stdc(sdr.stream(device, cfg), preset["rate"], clean, False)
+                else:
+                    self._run_aero(sdr.stream(device, cfg), preset.get("sps", 8),
+                                   clean, False)
         except Exception as e:
             self.q.put(("error", str(e)))
         finally:
             self.q.put(("stopped", None))
+
+    def _record(self, block):
+        rf = self._rec_file
+        if rf is not None:
+            inter = np.empty(block.size * 2, np.float32)
+            inter[0::2], inter[1::2] = block.real, block.imag
+            try:
+                rf.write(inter.tobytes())
+            except Exception:
+                pass
+
+    def _pre(self, block, clean):
+        if clean:
+            block = frontend.precondition(block)
+        self._record(block)
+        row = spectrum.spectrum_db(block, NFFT)
+        self.q.put(("spectrum", row))
+        self.q.put(("meter", (frontend.signal_level_db(block), frontend.quality_db(row))))
+        return block
+
+    def _run_aero(self, source, sps, clean, live):
+        for block in source:
+            if self.stop_flag.is_set():
+                break
+            block = self._pre(block, clean)
+            for f in dsp.decode_frames(block, sps, with_symbols=True):
+                self.q.put(("msg", f["payload"]))
+                if "symbols" in f:
+                    s = f["symbols"]
+                    if len(s) > 500:
+                        s = s[np.linspace(0, len(s) - 1, 500).astype(int)]
+                    self.q.put(("const", s))
+            if live:
+                time.sleep(0.7)
+
+    def _run_stdc(self, source, fs, clean, live):
+        # A full STD-C frame is 8.64 s; accumulate one before each decode.
+        downsample = fs > stdc_demod.SYMBOL_RATE * 32
+        work_fs = stdc_demod.SYMBOL_RATE * 16 if downsample else fs
+        frame_samps = work_fs / stdc_demod.SYMBOL_RATE * stdc.FRAME_SYMBOLS
+        buf = np.empty(0, dtype=np.complex128)
+        seen, order = set(), []
+        for block in source:
+            if self.stop_flag.is_set():
+                break
+            block = np.asarray(self._pre(block, clean), dtype=np.complex128)
+            if downsample:
+                block = channelize.ddc(block, fs, 0.0, work_fs)
+            buf = np.concatenate([buf, block])
+            if len(buf) >= frame_samps * 1.1:
+                for fr in stdc_demod.receive(buf, work_fs):
+                    key = (fr["frame_number"], fr["bytes"][:24])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    order.append(key)
+                    if len(order) > 256:
+                        seen.discard(order.pop(0))
+                    for m in stdc_parser.messages(stdc_parser.parse_frame(fr["bytes"])):
+                        self.q.put(("stdc", m))
+                buf = buf[-int(frame_samps * 2):]
+            if live:
+                time.sleep(0.9)
 
     # -- UI pump ----------------------------------------------------------
     def _drain(self):
@@ -265,6 +312,8 @@ class App(tk.Tk):
                 kind, data = self.q.get_nowait()
                 if kind == "msg":
                     self._add_message(data)
+                elif kind == "stdc":
+                    self._add_stdc(data)
                 elif kind == "spectrum":
                     self.wf_rows.append(data)
                     self._last_row = data
@@ -293,6 +342,20 @@ class App(tk.Tk):
         rec = messages.make_record(text, time.strftime("%H:%M:%S"))
         self.records.append(rec)
         self.tree.insert("", "end", values=(rec["time"], rec["kind"], rec["id"], text))
+        self.tree.yview_moveto(1.0)
+        self.counter.set(f"{self.count} messages")
+        if rec["lat"] is not None:
+            self._render_map()
+
+    def _add_stdc(self, m):
+        self.count += 1
+        ts = time.strftime("%H:%M:%S")
+        text = (m.get("text", "") or "").replace("\r", " ").strip()
+        rec = messages.make_record(text, ts)
+        rec["kind"] = "DISTRESS" if m.get("isDistress") else "EGC"
+        rec["id"] = m.get("priorityText", "")
+        self.records.append(rec)
+        self.tree.insert("", "end", values=(ts, rec["kind"], rec["id"], text))
         self.tree.yview_moveto(1.0)
         self.counter.set(f"{self.count} messages")
         if rec["lat"] is not None:
@@ -394,7 +457,7 @@ class App(tk.Tk):
                 c.create_text(4, y + 8, anchor="w", fill="#4f7ba3", text=f"{g}°", font=("Segoe UI", 7))
         for lon, lat, r in pts:
             x, y = to_xy(lon, lat)
-            col = "#f4d03f" if r["kind"] == "Aero" else "#5dade2"
+            col = {"Aero": "#f4d03f", "DISTRESS": "#e74c3c"}.get(r["kind"], "#5dade2")
             c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=col, outline="white")
             if r["id"]:
                 c.create_text(x + 7, y, anchor="w", fill="white", text=r["id"], font=("Segoe UI", 8))

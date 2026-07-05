@@ -53,50 +53,68 @@ def _resample_to_sps(x: np.ndarray, fs: float, symbol_rate: float, sps: int) -> 
     return np.interp(pos, xp, x.real) + 1j * np.interp(pos, xp, x.imag)
 
 
-def demodulate_symbols(iq: np.ndarray, samp_rate: float,
-                       symbol_rate: float = SYMBOL_RATE, beta: float = 0.3,
-                       sps: int = 8) -> np.ndarray:
-    """Baseband IQ -> hard symbol stream (0/1). Global polarity is unresolved
-    here; frame sync settles it."""
+def _symbols(iq: np.ndarray, samp_rate: float, symbol_rate: float = SYMBOL_RATE,
+             beta: float = 0.3, sps: int = 8) -> np.ndarray:
+    """Baseband IQ -> complex symbol stream (carrier not yet removed). Coarse
+    carrier estimate, resample to integer sps, matched filter, eye-opening
+    timing."""
     x = np.asarray(iq, dtype=np.complex128)
     if len(x) < sps * 4:
-        return np.zeros(0, dtype=np.uint8)
-
+        return np.zeros(0, dtype=np.complex128)
     x = _remove_coarse_cfo(x, samp_rate, symbol_rate)
     x = _resample_to_sps(x, samp_rate, symbol_rate, sps)
     x = np.convolve(x, channelize.rrc(beta, sps), mode="same")
-
-    # Timing: the sample phase with the largest mean power has the open eye.
     usable = (len(x) // sps) * sps
     if usable < sps:
-        return np.zeros(0, dtype=np.uint8)
+        return np.zeros(0, dtype=np.complex128)
     grid = x[:usable].reshape(-1, sps)
-    power = np.mean(np.abs(grid) ** 2, axis=0)
-    phase = int(np.argmax(power))
-    syms = grid[:, phase]
+    phase = int(np.argmax(np.mean(np.abs(grid) ** 2, axis=0)))
+    return grid[:, phase]
 
-    # Residual carrier: squaring gives 2x frequency then 2x phase.
-    sq = syms * syms
-    if len(sq) > 1:
+
+def _derotate_slice(syms: np.ndarray) -> np.ndarray:
+    """Remove residual carrier frequency then phase (squaring), slice to 0/1.
+    Global polarity is left for the unique word to settle."""
+    syms = np.asarray(syms, dtype=np.complex128)
+    if len(syms) > 1:
+        sq = syms * syms
         w = np.angle(np.sum(sq[1:] * np.conj(sq[:-1]))) / 2.0
         syms = syms * np.exp(-1j * w * np.arange(len(syms)))
         theta = np.angle(np.sum(syms * syms)) / 2.0
         syms = syms * np.exp(-1j * theta)
-
     return (syms.real < 0).astype(np.uint8)
+
+
+def demodulate_symbols(iq: np.ndarray, samp_rate: float,
+                       symbol_rate: float = SYMBOL_RATE, beta: float = 0.3,
+                       sps: int = 8) -> np.ndarray:
+    """Baseband IQ -> hard symbol stream (0/1), carrier removed over the whole
+    buffer. Suitable for a single frame; `receive` corrects per frame."""
+    return _derotate_slice(_symbols(iq, samp_rate, symbol_rate, beta, sps))
 
 
 def receive(iq: np.ndarray, samp_rate: float, symbol_rate: float = SYMBOL_RATE,
             tolerance: int = 30, **kw) -> list[dict]:
-    """Full STD-C receive: demodulate, synchronise, and decode every frame."""
-    bits = demodulate_symbols(iq, samp_rate, symbol_rate, **kw)
+    """Full STD-C receive: locate every frame, then correct carrier and slice
+    each frame independently so a slowly drifting or multi-frame capture still
+    decodes. Returns decoded frames."""
+    syms = _symbols(iq, samp_rate, symbol_rate, **kw)
+    if len(syms) < stdc.FRAME_SYMBOLS:
+        return []
+    provisional = _derotate_slice(syms)
     out = []
-    for offset, reversed_ in stdc.find_uw(bits, tolerance):
-        seg = bits[offset:offset + stdc.FRAME_SYMBOLS].copy()
-        if reversed_:
-            seg ^= 1
-        frame = stdc.decode_frame(seg)
-        frame["offset"] = offset
+    for offset, _rev in stdc.find_uw(provisional, tolerance):
+        seg = syms[offset:offset + stdc.FRAME_SYMBOLS]
+        if len(seg) < stdc.FRAME_SYMBOLS:
+            continue
+        bits = _derotate_slice(seg)                 # per-frame carrier correction
+        hits = stdc.find_uw(bits, tolerance)        # resolve this frame's polarity
+        if not hits:
+            continue
+        if hits[0][1]:
+            bits = 1 - bits
+        frame = stdc.decode_frame(bits)
+        frame["offset"] = int(offset)
         out.append(frame)
     return out
 

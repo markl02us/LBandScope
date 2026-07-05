@@ -281,6 +281,42 @@ def test_stdc_full_pipeline():
     assert any("NAVAREA III 042/26" in m["text"] for m in msgs)
 
 
+def test_stdc_demo_source():
+    """The offline STD-C demo is a decodable continuous stream with an EGC
+    distress and a NAVAREA warning."""
+    from lbandscope import demo, stdc_demod, stdc_parser as sp
+    sig = np.concatenate([b.astype(np.complex128) for b in demo.stdc_demo_blocks(6)])
+    texts = []
+    for fr in stdc_demod.receive(sig, stdc_demod.SYMBOL_RATE * 8):
+        texts += [m["text"] for m in sp.messages(sp.parse_frame(fr["bytes"]))]
+    assert any("NAVAREA" in t for t in texts)
+    assert any("DISTRESS" in t for t in texts)
+
+
+def test_cli_decode_stdc(tmp_path=None):
+    """decode-stdc reads a capture file and prints classified EGC messages."""
+    import io
+    import json
+    import os
+    import tempfile
+    from contextlib import redirect_stdout
+    from lbandscope import demo, cli
+    sig = np.concatenate([b.astype(np.complex64) for b in demo.stdc_demo_blocks(6)])
+    inter = np.empty(sig.size * 2, np.float32)
+    inter[0::2], inter[1::2] = sig.real, sig.imag
+    d = tmp_path or tempfile.mkdtemp()
+    path = os.path.join(str(d), "cap.cf32")
+    inter.tofile(path)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        rc = cli.main(["decode-stdc", "--source", "file", "--path", path,
+                       "--fmt", "cf32", "--fs", "9600"])
+    msgs = [json.loads(x) for x in out.getvalue().splitlines() if x.startswith("{")]
+    assert rc == 0 and msgs
+    assert any(m["distress"] for m in msgs)
+    assert any("NAVAREA" in m["text"] for m in msgs)
+
+
 def test_gui_constructs():
     """The window must build without error (skipped if no display available)."""
     import tkinter as tk
@@ -307,7 +343,8 @@ if __name__ == "__main__":
              test_constellation_symbols, test_find_peak_offset,
              test_frontend_conditioning, test_stdc_chain_roundtrip,
              test_stdc_demod_end_to_end, test_stdc_parser,
-             test_stdc_full_pipeline, test_gui_constructs]
+             test_stdc_full_pipeline, test_stdc_demo_source,
+             test_cli_decode_stdc, test_gui_constructs]
     failed = 0
     for t in tests:
         try:

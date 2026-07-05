@@ -109,6 +109,51 @@ def _run_decode(args) -> int:
     return 0
 
 
+def _run_decode_stdc(args) -> int:
+    from . import stdc, stdc_demod, stdc_parser
+    fs = args.fs if args.fs > 0 else args.baud * args.sps
+    src = iqsource.open_source(args)
+    buf = np.empty(0, dtype=np.complex128)
+    frame_samps = fs / args.baud * stdc.FRAME_SYMBOLS
+    cap, tail = int(frame_samps * 6), int(frame_samps * 2)
+    seen, seen_order, n_msgs = set(), [], 0
+
+    def process(b):
+        nonlocal n_msgs
+        if len(b) < frame_samps * 1.05:
+            return
+        work, rate = b, fs
+        if args.tune:
+            work = channelize.ddc(b, fs, args.tune, args.baud * args.sps)
+            rate = args.baud * args.sps
+        for fr in stdc_demod.receive(work, rate, symbol_rate=args.baud):
+            key = (fr["frame_number"], fr["bytes"][:24])
+            if key in seen:
+                continue
+            seen.add(key)
+            seen_order.append(key)
+            if len(seen_order) > 512:
+                seen.discard(seen_order.pop(0))
+            for m in stdc_parser.messages(stdc_parser.parse_frame(fr["bytes"])):
+                n_msgs += 1
+                print(json.dumps({
+                    "frame": fr["frame_number"],
+                    "service": m.get("service", ""),
+                    "priority": m.get("priorityText", ""),
+                    "distress": bool(m.get("isDistress")),
+                    "text": m.get("text", "").replace("\r", " ").strip(),
+                }), flush=True)
+
+    for block in src:
+        buf = np.concatenate([buf, block.astype(np.complex128)])
+        if len(buf) >= cap:
+            process(buf)
+            buf = buf[-tail:]
+    process(buf)
+    print(f"# decoded {n_msgs} STD-C message(s)", file=sys.stderr)
+    return 0
+
+
 def _run_doctor() -> int:
     from . import sdr
     env = sdr.check_environment()
@@ -145,6 +190,23 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--freq", type=float, default=1545e6)
     d.add_argument("--rate", type=float, default=2.048e6)
     d.add_argument("--gain", type=float, default=40.0)
+
+    s = sub.add_parser("decode-stdc",
+                       help="decode Inmarsat-C / STD-C EGC messages from a capture")
+    s.add_argument("--source", choices=["file", "stdin", "tcp", "soapy"], required=True)
+    s.add_argument("--path", default="", help="file path, or host:port for tcp")
+    s.add_argument("--fmt", choices=["cf32", "cs16", "cu8"], default="cf32")
+    s.add_argument("--block", type=int, default=262144)
+    s.add_argument("--sps", type=int, default=8, help="working samples per symbol")
+    s.add_argument("--fs", type=float, default=0.0,
+                   help="input sample rate (Hz); if omitted, assumes baud*sps")
+    s.add_argument("--tune", type=float, default=0.0,
+                   help="channel offset from center (Hz); enables down-conversion")
+    s.add_argument("--baud", type=float, default=1200.0, help="symbol rate (Hz)")
+    s.add_argument("--driver", default="rtlsdr", help="SoapySDR driver key")
+    s.add_argument("--freq", type=float, default=1541.45e6)
+    s.add_argument("--rate", type=float, default=2.048e6)
+    s.add_argument("--gain", type=float, default=40.0)
     return p
 
 
@@ -159,6 +221,8 @@ def main(argv=None) -> int:
         return _run_selftest()
     if args.cmd == "decode":
         return _run_decode(args)
+    if args.cmd == "decode-stdc":
+        return _run_decode_stdc(args)
     return 2
 
 

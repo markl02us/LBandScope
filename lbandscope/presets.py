@@ -12,6 +12,11 @@ PRESETS = [
         "blurb": "Exercise the decoder with sample traffic.",
     },
     {
+        "name": "STD-C demo (no radio required)",
+        "kind": "stdc-demo",
+        "blurb": "Watch the maritime receiver decode sample EGC safety traffic.",
+    },
+    {
         "name": "Inmarsat Aero",
         "kind": "inmarsat",
         "freq": 1545_000_000,

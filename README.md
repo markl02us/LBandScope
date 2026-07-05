@@ -40,6 +40,10 @@ You do not need to install anything or connect a radio to try it.
 2. Leave the channel and receiver set to Demo.
 3. Click Start. Decoded sample messages appear in the table.
 
+Select the **STD-C demo** channel to watch the maritime receiver pull real EGC
+safety messages — a NAVAREA warning, a distress relay, a weather forecast — out of
+a simulated Inmarsat-C downlink, classified by priority and plotted on the map.
+
 ## Using a real receiver
 
 Three steps here are hardware and operating-system tasks that no application can
@@ -82,6 +86,20 @@ python -m lbandscope decode --source file --path wide.cf32 \
 ```
 
 Each decoded frame is printed as one JSON object.
+
+Decode Inmarsat-C / STD-C EGC safety messages from a capture:
+
+```
+# a channel recording already at baseband (about 9600 samples/s)
+python -m lbandscope decode-stdc --source file --path stdc.cf32 --fmt cf32 --fs 9600
+
+# a wideband capture, giving the channel offset from centre
+python -m lbandscope decode-stdc --source file --path wide.cf32 \
+    --fmt cf32 --fs 2048000 --tune 12000
+```
+
+Each decoded EGC message is printed as one JSON object with its service,
+priority, distress flag, and text.
 
 ## Prebuilt Windows binaries (optional)
 
