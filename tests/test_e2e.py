@@ -251,6 +251,36 @@ def test_stdc_demod_end_to_end():
     assert r["byte_exact"] and r["decoded"] == 1
 
 
+def test_stdc_parser():
+    """Packets built to the documented format parse back with fields, checksum,
+    and text intact."""
+    from lbandscope import stdc_parser
+    r = stdc_parser._selftest()
+    assert r["all_crc_ok"] and r["egc_text_ok"] and r["aa_text_ok"]
+
+
+def test_stdc_full_pipeline():
+    """The whole receiver: a readable EGC message becomes symbols, a pulse-shaped
+    noisy IQ signal, and is demodulated, decoded, parsed, and read back."""
+    from lbandscope import stdc, stdc_demod, stdc_parser as sp
+    egc = sp._build_medium_packet(
+        0xB1, bytes([0x31, 0x40, 0x12, 0x34, 0x01, 0]) + bytes(4)
+        + b"NAVAREA III 042/26 BUOY ADRIFT OFF SICILY")
+    frame_bytes = egc.ljust(640, b"\x00")
+    sym = stdc.encode_frame(frame_bytes)
+    tx = stdc_demod.modulate_iq(sym)
+    fs = 1200 * 8
+    n = np.arange(len(tx))
+    rng = np.random.default_rng(0)
+    rx = tx * np.exp(1j * (2 * np.pi * (90 / fs) * n + 0.5))
+    pw = np.mean(np.abs(tx) ** 2) / 10 ** (12 / 10)
+    rx = rx + np.sqrt(pw / 2) * (rng.standard_normal(len(rx)) + 1j * rng.standard_normal(len(rx)))
+    frames = stdc_demod.receive(rx, fs)
+    assert frames and frames[0]["bytes"] == frame_bytes
+    msgs = sp.messages(sp.parse_frame(frames[0]["bytes"]))
+    assert any("NAVAREA III 042/26" in m["text"] for m in msgs)
+
+
 def test_gui_constructs():
     """The window must build without error (skipped if no display available)."""
     import tkinter as tk
@@ -276,7 +306,8 @@ if __name__ == "__main__":
              test_spectrum_locates_tone, test_message_parse_and_export,
              test_constellation_symbols, test_find_peak_offset,
              test_frontend_conditioning, test_stdc_chain_roundtrip,
-             test_stdc_demod_end_to_end, test_gui_constructs]
+             test_stdc_demod_end_to_end, test_stdc_parser,
+             test_stdc_full_pipeline, test_gui_constructs]
     failed = 0
     for t in tests:
         try:

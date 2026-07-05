@@ -121,11 +121,13 @@ framing, application) are in place and tested. The Inmarsat-C (STD-C) receive
 chain — unique-word frame synchronisation, row depermutation, deinterleaving,
 K=7 rate-1/2 Viterbi FEC, and descrambling — is implemented in `stdc.py`, and the
 coherent BPSK symbol demodulator (carrier and timing recovery from IQ) is in
-`stdc_demod.py`. The full IQ → symbols → frame path is validated end to end
-against a synthetic pulse-shaped, carrier-offset, noisy channel: a known frame
-decodes byte-exact through about 10 dB SNR. The remaining step is confirmation
-against a real off-air capture, and a message parser to render decoded frames as
-readable EGC/marine text.
+`stdc_demod.py`, and the frame parser (`stdc_parser.py`) turns decoded frames into
+readable EGC/marine messages — packet framing, checksums, IA5/ITA2 text,
+multi-frame reassembly, and service/priority/distress classification. The whole
+receiver is validated end to end: a readable EGC message becomes symbols, a
+pulse-shaped noisy IQ signal, and is demodulated, decoded byte-exact, parsed, and
+read back (through about 10 dB SNR). The remaining step is confirmation against a
+real off-air capture.
 
 ## License
 
