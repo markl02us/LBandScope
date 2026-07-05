@@ -171,6 +171,26 @@ def test_message_parse_and_export():
     assert "<Placemark>" in messages.to_kml(recs)
 
 
+def test_constellation_symbols():
+    rx = dsp.apply_channel(dsp.modulate(b"constellation check"), snr_db=20,
+                           cfo=3e-4, phase=0.4, rng=np.random.default_rng(0))
+    fr = dsp.decode_frames(rx, with_symbols=True, max_frames=1)
+    assert fr and "symbols" in fr[0]
+    pre = fr[0]["symbols"][:64]                       # preamble symbols
+    assert np.iscomplexobj(pre)
+    # BPSK after recovery: energy on the real axis, small quadrature component
+    assert np.mean(np.abs(pre.imag)) < np.mean(np.abs(pre.real))
+    pts = dsp.constellation(rx)
+    assert 0 < len(pts) <= 800
+
+
+def test_find_peak_offset():
+    fs = 2.048e6
+    x = np.exp(1j * 2 * np.pi * 0.1 * np.arange(8192))   # +0.1 cyc/sample carrier
+    off, prom = frontend.find_peak_offset(spectrum.spectrum_db(x, 256), fs)
+    assert abs(off - 0.1 * fs) < 0.02 * fs and prom > 10
+
+
 def test_frontend_conditioning():
     # DC removal
     x = np.exp(1j * 2 * np.pi * 0.05 * np.arange(4096)) + (0.4 + 0.3j)
@@ -222,6 +242,7 @@ if __name__ == "__main__":
              test_presets_valid, test_demo_mode_decodes,
              test_doctor_no_crash_without_backend,
              test_spectrum_locates_tone, test_message_parse_and_export,
+             test_constellation_symbols, test_find_peak_offset,
              test_frontend_conditioning, test_gui_constructs]
     failed = 0
     for t in tests:

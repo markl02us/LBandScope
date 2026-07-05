@@ -51,3 +51,18 @@ def quality_db(spectrum_row_db: np.ndarray) -> float:
     proxy for how strong the signal is above the noise."""
     s = np.asarray(spectrum_row_db)
     return float(np.max(s) - np.median(s))
+
+
+def find_peak_offset(spectrum_row_db: np.ndarray, fs: float):
+    """Locate the strongest carrier in a DC-centered power spectrum.
+    Returns (offset_hz_from_center, prominence_db). The DC bin is excluded so the
+    front-end spike is not mistaken for a signal."""
+    s = np.asarray(spectrum_row_db)
+    n = len(s)
+    center = n // 2
+    masked = s.copy()
+    masked[max(0, center - 1):center + 2] = -np.inf
+    idx = int(np.argmax(masked))
+    offset_hz = (idx - center) / n * fs
+    prominence = float(s[idx] - np.median(s))
+    return offset_hz, prominence

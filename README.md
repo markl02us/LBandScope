@@ -13,10 +13,14 @@ Public License v3 (see `LICENSE`), which keeps it free to use, study, and share.
   stream.
 - Down-converts and resamples an arbitrary device rate to the channel of
   interest, so the decoder does not depend on the SDR's native sample rate.
+- Conditions the input (DC removal, I/Q imbalance correction) and shows live
+  signal-level and quality meters to help aim an antenna.
 - Detects and decodes frames continuously, reporting each with a timestamp.
-- Shows a live spectrum waterfall, so signal presence is visible at a glance.
+- Shows a spectrum waterfall and a symbol constellation, and can locate the
+  strongest carrier in the passband.
 - Extracts positions from position-bearing messages and plots them on a map.
-- Exports decoded data to CSV, GeoJSON, and KML for use in other tools.
+- Records IQ to a file for later replay, and exports decoded data to CSV,
+  GeoJSON, and KML.
 - Runs a full offline demonstration with no radio attached.
 
 ## Quick start

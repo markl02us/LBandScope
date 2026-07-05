@@ -160,10 +160,9 @@ def _detect(r: np.ndarray, template: np.ndarray):
     return mag / (np.sqrt(e * T) + 1e-12), mag
 
 
-def _decode_at(r: np.ndarray, start: float, sps: int, seed: int,
-               pre_sym: np.ndarray):
-    """Decode one frame from CFO-corrected `r` at fractional sample `start`.
-    Returns (payload, symbols_consumed) or None."""
+def _frame_symbols(r: np.ndarray, start: float, sps: int, pre_sym: np.ndarray):
+    """Recover carrier- and timing-corrected symbols for one frame at fractional
+    sample `start`. Returns the complex symbol array (constellation) or None."""
     avail = int((len(r) - np.ceil(start)) // sps)
     if avail <= len(pre_sym):
         return None
@@ -183,23 +182,33 @@ def _decode_at(r: np.ndarray, start: float, sps: int, seed: int,
         w = np.angle(np.sum(prod[h:2 * h]) * np.conj(np.sum(prod[:h]))) / h
         syms = syms * np.exp(-1j * w * idx)
     theta = np.angle(np.sum(syms[:k] * pre_sym[:k]))
-    syms = syms * np.exp(-1j * theta)
-    bits = (syms.real < 0).astype(np.uint8)
+    return syms * np.exp(-1j * theta)
 
+
+def _decode_at(r: np.ndarray, start: float, sps: int, seed: int,
+               pre_sym: np.ndarray):
+    """Decode one frame at `start`. Returns (payload, symbols_consumed, symbols)
+    or None."""
+    syms = _frame_symbols(r, start, sps, pre_sym)
+    if syms is None:
+        return None
+    bits = (syms.real < 0).astype(np.uint8)
     frame_bits = scramble(bits[len(PREAMBLE_BITS):], seed)
     payload, ok = parse_frame(bits_to_bytes(frame_bits))
     if not ok:
         return None
     consumed = len(PREAMBLE_BITS) + (len(SYNC) + 1 + len(payload) + 2) * 8
-    return payload, consumed
+    return payload, consumed, syms
 
 
 def decode_frames(iq: np.ndarray, sps: int = 8, seed: int = 0x7F,
-                  thresh: float = 0.45, max_frames: int = 100000):
+                  thresh: float = 0.45, max_frames: int = 100000,
+                  with_symbols: bool = False):
     """Detect and decode every frame in a buffer.
 
-    Returns a list of {'sample': int, 'payload': bytes}. One coarse CFO estimate
-    is applied to the whole buffer; the per-frame stage removes the residual.
+    Returns a list of {'sample': int, 'payload': bytes}, plus 'symbols' (the
+    constellation) when `with_symbols` is set. One coarse CFO estimate is applied
+    to the whole buffer; the per-frame stage removes the residual.
     """
     iq = np.asarray(iq, dtype=np.complex128)
     pre_sym = 1 - 2 * PREAMBLE_BITS.astype(np.float64)
@@ -235,8 +244,11 @@ def decode_frames(iq: np.ndarray, sps: int = 8, seed: int = 0x7F,
             mu = 0.0
         res = _decode_at(r, i + mu, sps, seed, pre_sym)
         if res is not None:
-            payload, consumed = res
-            frames.append({"sample": int(i), "payload": payload})
+            payload, consumed, syms = res
+            entry = {"sample": int(i), "payload": payload}
+            if with_symbols:
+                entry["symbols"] = syms
+            frames.append(entry)
             last_end = i + consumed * sps
     return frames
 
@@ -247,3 +259,14 @@ def demodulate(iq: np.ndarray, sps: int = 8, seed: int = 0x7F):
     if fr:
         return fr[0]["payload"], True
     return None, False
+
+
+def constellation(iq: np.ndarray, sps: int = 8, max_points: int = 800) -> np.ndarray:
+    """Recovered symbol points from the first detected frame (for display)."""
+    fr = decode_frames(iq, sps, max_frames=1, with_symbols=True)
+    if not fr or "symbols" not in fr[0]:
+        return np.zeros(0, dtype=np.complex128)
+    s = fr[0]["symbols"]
+    if len(s) > max_points:
+        s = s[np.linspace(0, len(s) - 1, max_points).astype(int)]
+    return s

@@ -72,6 +72,9 @@ class App(tk.Tk):
         self.records = []
         self.wf_rows = collections.deque(maxlen=WATERFALL_ROWS)
         self._wf_img = None
+        self._rec_file = None
+        self._last_row = None
+        self._find_fs = 2.048e6
 
         self._build_menu()
         self._build()
@@ -142,11 +145,15 @@ class App(tk.Tk):
         nb.pack(fill="both", expand=True, padx=12, pady=4)
         self._build_messages(nb)
         self._build_spectrum(nb)
+        self._build_constellation(nb)
         self._build_map(nb)
 
         foot = ttk.Frame(self, padding=(12, 6))
         foot.pack(fill="x")
         ttk.Button(foot, text="Clear", command=self.clear).pack(side="left")
+        ttk.Button(foot, text="Find signal", command=self.find_signal).pack(side="left", padx=6)
+        self.rec_btn = ttk.Button(foot, text="Record IQ", command=self.toggle_record)
+        self.rec_btn.pack(side="left")
         self.counter = tk.StringVar(value="0 messages")
         ttk.Label(foot, textvariable=self.counter).pack(side="right")
 
@@ -168,6 +175,12 @@ class App(tk.Tk):
         nb.add(tab, text="Spectrum")
         self.wf_canvas = tk.Canvas(tab, bg="#101014", highlightthickness=0)
         self.wf_canvas.pack(fill="both", expand=True)
+
+    def _build_constellation(self, nb):
+        tab = ttk.Frame(nb)
+        nb.add(tab, text="Constellation")
+        self.const_canvas = tk.Canvas(tab, bg="#0a0e12", highlightthickness=0)
+        self.const_canvas.pack(fill="both", expand=True)
 
     def _build_map(self, nb):
         tab = ttk.Frame(nb)
@@ -198,6 +211,7 @@ class App(tk.Tk):
         preset = presets.by_name(self.channel.get())
         device = None if preset["kind"] == "demo" else self._selected_device()
         clean, bias = self.clean.get(), self.bias.get()
+        self._find_fs = preset.get("rate", 2.048e6)
         self.stop_flag.clear()
         self.worker = threading.Thread(target=self._run, args=(preset, device, clean, bias),
                                        daemon=True)
@@ -218,12 +232,25 @@ class App(tk.Tk):
                     break
                 if clean:
                     block = frontend.precondition(block)
+                rf = self._rec_file
+                if rf is not None:
+                    inter = np.empty(block.size * 2, np.float32)
+                    inter[0::2], inter[1::2] = block.real, block.imag
+                    try:
+                        rf.write(inter.tobytes())
+                    except Exception:
+                        pass
                 row = spectrum.spectrum_db(block, NFFT)
                 self.q.put(("spectrum", row))
                 self.q.put(("meter", (frontend.signal_level_db(block),
                                       frontend.quality_db(row))))
-                for f in dsp.decode_frames(block, sps):
+                for f in dsp.decode_frames(block, sps, with_symbols=True):
                     self.q.put(("msg", f["payload"]))
+                    if "symbols" in f:
+                        s = f["symbols"]
+                        if len(s) > 500:
+                            s = s[np.linspace(0, len(s) - 1, 500).astype(int)]
+                        self.q.put(("const", s))
                 if live:
                     time.sleep(0.7)
         except Exception as e:
@@ -241,9 +268,12 @@ class App(tk.Tk):
                     self._add_message(data)
                 elif kind == "spectrum":
                     self.wf_rows.append(data)
+                    self._last_row = data
                     dirty_wf = True
                 elif kind == "meter":
                     self._update_meter(*data)
+                elif kind == "const":
+                    self._render_constellation(data)
                 elif kind == "log":
                     self.status.set(data)
                 elif kind == "error":
@@ -275,7 +305,49 @@ class App(tk.Tk):
         self.qual_bar["value"] = max(0, min(100, quality_db / 40 * 100))
         self.qual_txt.set(f"{quality_db:.0f} dB")
 
+    def find_signal(self):
+        if self._last_row is None:
+            self.status.set("Start receiving first, then Find signal.")
+            return
+        off, prom = frontend.find_peak_offset(self._last_row, self._find_fs)
+        self.status.set(f"Strongest signal: {off / 1e3:+.1f} kHz from center, "
+                        f"{prom:.0f} dB above noise.")
+
+    def toggle_record(self):
+        if self._rec_file is not None:
+            f, self._rec_file = self._rec_file, None
+            try:
+                f.close()
+            except Exception:
+                pass
+            self.rec_btn.config(text="Record IQ")
+            self.status.set("Recording stopped.")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".cf32",
+                                            filetypes=[("Complex float32 IQ", "*.cf32")])
+        if not path:
+            return
+        self._rec_file = open(path, "wb")
+        self.rec_btn.config(text="Stop recording")
+        self.status.set("Recording IQ (cf32)...")
+
     # -- rendering --------------------------------------------------------
+    def _render_constellation(self, pts):
+        c = self.const_canvas
+        w, h = max(c.winfo_width(), 64), max(c.winfo_height(), 64)
+        c.delete("all")
+        cx, cy, r = w / 2, h / 2, min(w, h) * 0.4
+        c.create_line(0, cy, w, cy, fill="#1b2733")
+        c.create_line(cx, 0, cx, h, fill="#1b2733")
+        pts = np.asarray(pts)
+        if len(pts) == 0:
+            return
+        m = float(np.median(np.abs(pts))) + 1e-9
+        for p in pts:
+            x = cx + (p.real / m) * r * 0.5
+            y = cy - (p.imag / m) * r * 0.5
+            c.create_oval(x - 1.5, y - 1.5, x + 1.5, y + 1.5, fill="#5dade2", outline="")
+
     def _render_waterfall(self):
         if not self.wf_rows:
             return
