@@ -21,7 +21,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lbandscope import (dsp, iqsource, channelize, demo, sdr, presets,  # noqa: E402
-                        spectrum, messages)
+                        spectrum, messages, frontend)
 
 
 def _roundtrip(payload: bytes, snr_db: float, cfo: float, seed_ch: int) -> bytes:
@@ -171,6 +171,34 @@ def test_message_parse_and_export():
     assert "<Placemark>" in messages.to_kml(recs)
 
 
+def test_frontend_conditioning():
+    # DC removal
+    x = np.exp(1j * 2 * np.pi * 0.05 * np.arange(4096)) + (0.4 + 0.3j)
+    assert abs(frontend.remove_dc(x).mean()) < 1e-9
+
+    # IQ imbalance correction improves image rejection
+    f, n = 0.1, np.arange(8192)
+    tone = np.exp(1j * 2 * np.pi * f * n)
+    phi, g = 0.15, 1.25
+    y = tone.real + 1j * (g * (tone.imag * np.cos(phi) + tone.real * np.sin(phi)))
+
+    def irr(z):
+        S = np.abs(np.fft.fft(z))
+        N = len(z)
+        return 20 * np.log10(S[int(round(f * N))] / S[int(round((1 - f) * N))])
+
+    assert irr(frontend.correct_iq_imbalance(y)) - irr(y) > 30.0
+
+    # conditioning does not break a real decode
+    rx = dsp.apply_channel(dsp.modulate(b"conditioned frame"), snr_db=12,
+                           cfo=5e-4, phase=0.5, rng=np.random.default_rng(0))
+    got, ok = dsp.demodulate(frontend.precondition(rx))
+    assert ok and got == b"conditioned frame"
+
+    assert isinstance(frontend.signal_level_db(tone), float)
+    assert frontend.quality_db(spectrum.spectrum_db(tone, 256)) > 10
+
+
 def test_gui_constructs():
     """The window must build without error (skipped if no display available)."""
     import tkinter as tk
@@ -194,7 +222,7 @@ if __name__ == "__main__":
              test_presets_valid, test_demo_mode_decodes,
              test_doctor_no_crash_without_backend,
              test_spectrum_locates_tone, test_message_parse_and_export,
-             test_gui_constructs]
+             test_frontend_conditioning, test_gui_constructs]
     failed = 0
     for t in tests:
         try:

@@ -15,7 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 
-from . import __version__, demo, dsp, messages, presets, sdr, spectrum
+from . import __version__, demo, dsp, frontend, messages, presets, sdr, spectrum
 
 DEMO_RADIO = "Demo (no radio required)"
 NFFT = 256
@@ -114,9 +114,29 @@ class App(tk.Tk):
         self.device.grid(row=1, column=1, sticky="w", padx=8)
         ttk.Button(ctrl, text="Refresh", command=self.refresh_devices).grid(row=1, column=2, padx=4)
 
+        self.clean = tk.BooleanVar(value=True)
+        self.bias = tk.BooleanVar(value=True)
+        adv = ttk.Frame(ctrl)
+        adv.grid(row=0, column=2, rowspan=2, padx=(16, 0), sticky="w")
+        ttk.Checkbutton(adv, text="Signal cleanup", variable=self.clean).pack(anchor="w")
+        ttk.Checkbutton(adv, text="Antenna power (bias-tee)", variable=self.bias).pack(anchor="w")
+
         self.start_btn = tk.Button(self, text="Start", height=2, bg="#1e7e34", fg="white",
                                    font=("Segoe UI", 12, "bold"), command=self.toggle)
         self.start_btn.pack(fill="x", padx=12, pady=(6, 4))
+
+        meter = ttk.Frame(self, padding=(12, 0))
+        meter.pack(fill="x")
+        ttk.Label(meter, text="Signal", width=8).grid(row=0, column=0, sticky="w")
+        self.level_bar = ttk.Progressbar(meter, length=180, maximum=100)
+        self.level_bar.grid(row=0, column=1, padx=6)
+        self.level_txt = tk.StringVar(value="--")
+        ttk.Label(meter, textvariable=self.level_txt, width=10).grid(row=0, column=2)
+        ttk.Label(meter, text="Quality", width=8).grid(row=0, column=3, sticky="w", padx=(16, 0))
+        self.qual_bar = ttk.Progressbar(meter, length=180, maximum=100)
+        self.qual_bar.grid(row=0, column=4, padx=6)
+        self.qual_txt = tk.StringVar(value="--")
+        ttk.Label(meter, textvariable=self.qual_txt, width=10).grid(row=0, column=5)
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=12, pady=4)
@@ -177,24 +197,31 @@ class App(tk.Tk):
             return
         preset = presets.by_name(self.channel.get())
         device = None if preset["kind"] == "demo" else self._selected_device()
+        clean, bias = self.clean.get(), self.bias.get()
         self.stop_flag.clear()
-        self.worker = threading.Thread(target=self._run, args=(preset, device), daemon=True)
+        self.worker = threading.Thread(target=self._run, args=(preset, device, clean, bias),
+                                       daemon=True)
         self.worker.start()
         self.start_btn.config(text="Stop", bg="#a11")
 
-    def _run(self, preset, device):
+    def _run(self, preset, device, clean, bias):
         try:
             if device is None:
                 self.q.put(("log", "Demo mode."))
                 source, sps, live = demo.demo_iq_blocks(n_blocks=10 ** 9), 8, True
             else:
                 self.q.put(("log", f"Receiving on {device['label']}."))
-                cfg = {"freq": preset["freq"], "rate": preset["rate"]}
+                cfg = {"freq": preset["freq"], "rate": preset["rate"], "bias_tee": bias}
                 source, sps, live = sdr.stream(device, cfg), preset.get("sps", 8), False
             for block in source:
                 if self.stop_flag.is_set():
                     break
-                self.q.put(("spectrum", spectrum.spectrum_db(block, NFFT)))
+                if clean:
+                    block = frontend.precondition(block)
+                row = spectrum.spectrum_db(block, NFFT)
+                self.q.put(("spectrum", row))
+                self.q.put(("meter", (frontend.signal_level_db(block),
+                                      frontend.quality_db(row))))
                 for f in dsp.decode_frames(block, sps):
                     self.q.put(("msg", f["payload"]))
                 if live:
@@ -215,6 +242,8 @@ class App(tk.Tk):
                 elif kind == "spectrum":
                     self.wf_rows.append(data)
                     dirty_wf = True
+                elif kind == "meter":
+                    self._update_meter(*data)
                 elif kind == "log":
                     self.status.set(data)
                 elif kind == "error":
@@ -239,6 +268,12 @@ class App(tk.Tk):
         self.counter.set(f"{self.count} messages")
         if rec["lat"] is not None:
             self._render_map()
+
+    def _update_meter(self, level_db, quality_db):
+        self.level_bar["value"] = max(0, min(100, (level_db + 60) / 60 * 100))
+        self.level_txt.set(f"{level_db:.0f} dBFS")
+        self.qual_bar["value"] = max(0, min(100, quality_db / 40 * 100))
+        self.qual_txt.set(f"{quality_db:.0f} dB")
 
     # -- rendering --------------------------------------------------------
     def _render_waterfall(self):

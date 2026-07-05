@@ -8,21 +8,17 @@ return empty results rather than raising, so the rest of the application runs.
 """
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 
 
 def available_backends():
     found = []
-    try:
-        import rtlsdr  # noqa: F401
+    if importlib.util.find_spec("rtlsdr") is not None:
         found.append("rtlsdr")
-    except Exception:
-        pass
-    try:
-        import SoapySDR  # noqa: F401
+    if importlib.util.find_spec("SoapySDR") is not None:
         found.append("soapy")
-    except Exception:
-        pass
     return found
 
 
@@ -78,6 +74,12 @@ def stream(device, cfg, block=262144):
             sdr.gain = "auto"
         except Exception:
             pass
+        if cfg.get("bias_tee"):
+            # Powers the antenna's LNA. Not all librtlsdr builds expose this.
+            try:
+                sdr.set_bias_tee(True)
+            except Exception:
+                pass
         try:
             while True:
                 yield np.asarray(sdr.read_samples(block), dtype=np.complex64)
