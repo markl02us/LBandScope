@@ -119,11 +119,13 @@ records the measured behavior.
 The reusable receiver stages and the front end (device I/O, channelizer, stream
 framing, application) are in place and tested. The Inmarsat-C (STD-C) receive
 chain — unique-word frame synchronisation, row depermutation, deinterleaving,
-K=7 rate-1/2 Viterbi FEC, and descrambling — is implemented in `stdc.py` and
-validated by a full transmit/receive round trip: a random frame returns
-byte-exact and the Viterbi stage corrects a realistic symbol-error rate. The
-remaining work to decode a live STD-C signal is the symbol demodulator (carrier
-and timing recovery from IQ) and validation against an off-air capture.
+K=7 rate-1/2 Viterbi FEC, and descrambling — is implemented in `stdc.py`, and the
+coherent BPSK symbol demodulator (carrier and timing recovery from IQ) is in
+`stdc_demod.py`. The full IQ → symbols → frame path is validated end to end
+against a synthetic pulse-shaped, carrier-offset, noisy channel: a known frame
+decodes byte-exact through about 10 dB SNR. The remaining step is confirmation
+against a real off-air capture, and a message parser to render decoded frames as
+readable EGC/marine text.
 
 ## License
 

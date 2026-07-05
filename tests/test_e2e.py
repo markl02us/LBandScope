@@ -243,6 +243,14 @@ def test_stdc_chain_roundtrip():
     assert stdc.decode_frame(noisy)["bytes"] == frame
 
 
+def test_stdc_demod_end_to_end():
+    """Full IQ -> symbols -> frame path: a pulse-shaped, carrier-offset, noisy
+    BPSK signal built from a known frame demodulates and decodes byte-exact."""
+    from lbandscope import stdc_demod
+    r = stdc_demod._selftest(snr_db=12.0, cfo_hz=120.0, seed=1)
+    assert r["byte_exact"] and r["decoded"] == 1
+
+
 def test_gui_constructs():
     """The window must build without error (skipped if no display available)."""
     import tkinter as tk
@@ -268,7 +276,7 @@ if __name__ == "__main__":
              test_spectrum_locates_tone, test_message_parse_and_export,
              test_constellation_symbols, test_find_peak_offset,
              test_frontend_conditioning, test_stdc_chain_roundtrip,
-             test_gui_constructs]
+             test_stdc_demod_end_to_end, test_gui_constructs]
     failed = 0
     for t in tests:
         try:
