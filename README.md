@@ -3,9 +3,22 @@
 A decoder and monitor for Inmarsat L-band signals (Aero and STD-C/EGC), with a
 point-and-click desktop application and a command-line tool.
 
-This software is free of charge and always will be. It exists to make these
-signals easier for other people to receive. It is licensed under the GNU General
-Public License v3 (see `LICENSE`), which keeps it free to use, study, and share.
+It is free, open-source software under the GNU General Public License v3 (see
+`LICENSE`), written to help more people receive and experiment with these signals
+and to give anyone a starting point to build on.
+
+## Related projects
+
+This is an independent implementation and shares no code with the projects below.
+Anyone who wants a more complete decoder, or who wants to take this further,
+should start with them:
+
+- **InmarScope** by Sarah Rose Lives — a full multi-channel Inmarsat decoder for
+  Windows with voice-call following and more:
+  <https://github.com/SarahRoseLives/InmarScope>. Precompiled builds are available
+  through <https://sarahsforge.dev>.
+- **JAERO** by Jonti — the widely used open-source Inmarsat Aero decoder whose DSP
+  work underpins much of this field: <https://github.com/jontio/JAERO>.
 
 ## What it does
 

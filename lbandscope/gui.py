@@ -42,8 +42,6 @@ Then
   - Click Refresh, select the receiver, choose a channel, and click Start.
 
 Until a receiver is connected, Demo mode reproduces the full experience.
-
-This software is free of charge, now and in the future.
 """
 
 ABOUT = f"""\
@@ -51,9 +49,11 @@ LBandScope {__version__}
 
 A decoder and monitor for Inmarsat L-band signals.
 
-Free of charge and provided to make these signals easier for others to receive.
-Licensed under the GNU General Public License v3, so it remains free to use,
-study, and share.
+Free, open-source software under the GNU General Public License v3.
+
+An independent implementation. For a more complete decoder see InmarScope by
+Sarah Rose Lives, and JAERO by Jonti, whose work in this field this project
+builds on in spirit.
 """
 
 
